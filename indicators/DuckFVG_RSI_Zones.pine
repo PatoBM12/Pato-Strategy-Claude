@@ -1,0 +1,124 @@
+//@version=5
+indicator("🐤 Duck FVG — RSI Zone Monitor", shorttitle="🐤 RSI Zones", overlay=false)
+
+// ─────────────────────────────────────────────
+//  INPUTS
+// ─────────────────────────────────────────────
+rsi_length    = input.int(14, "RSI Length",          minval=1, group="RSI Settings")
+purple_smooth = input.int(3,  "Purple Smooth (Fast)", minval=1, group="RSI Settings")
+yellow_smooth = input.int(9,  "Yellow Smooth (Slow)", minval=1, group="RSI Settings")
+
+// ─────────────────────────────────────────────
+//  RSI + SMOOTHING (Purple = fast, Yellow = slow)
+// ─────────────────────────────────────────────
+rsi_raw = ta.rsi(close, rsi_length)
+purple  = ta.ema(rsi_raw, purple_smooth)
+yellow  = ta.ema(rsi_raw, yellow_smooth)
+
+// ─────────────────────────────────────────────
+//  ZONE CLASSIFICATION (based on Purple level)
+// ─────────────────────────────────────────────
+// SELL side (Purple < 50)
+sell_active     = purple < 50  and purple >= 35
+sell_risk       = purple < 35  and purple >= 30
+sell_exhaustion = purple < 30
+
+// BUY side (Purple > 50)
+buy_active      = purple > 50  and purple <= 65
+buy_exhaustion  = purple > 70
+buy_risk        = purple > 65  and purple <= 70
+
+// Neutral (Purple near 50)
+neutral_zone = purple >= 50 and purple <= 50  // exact 50 edge case
+
+// ─────────────────────────────────────────────
+//  BACKGROUND COLOR
+// ─────────────────────────────────────────────
+bg_color =
+  sell_exhaustion or buy_exhaustion ? color.new(color.red,    60) :
+  sell_risk       or buy_risk       ? color.new(color.orange, 65) :
+  sell_active     or buy_active     ? color.new(color.green,  80) :
+  color.new(color.gray, 92)
+
+bgcolor(bg_color, title="Zone Background")
+
+// ─────────────────────────────────────────────
+//  PLOT LINES
+// ─────────────────────────────────────────────
+plot(purple, "Purple (Fast RSI)", color=color.new(color.purple, 0), linewidth=2)
+plot(yellow, "Yellow (Slow RSI)", color=color.new(color.yellow, 0), linewidth=2)
+
+// ─────────────────────────────────────────────
+//  HORIZONTAL LEVELS
+// ─────────────────────────────────────────────
+hline(70, "❌ Agotamiento BUY",  color=color.new(color.red,    20), linestyle=hline.style_dashed, linewidth=1)
+hline(65, "⚠️ Riesgo BUY",      color=color.new(color.orange, 20), linestyle=hline.style_dashed, linewidth=1)
+hline(55, "Reset BUY target",   color=color.new(color.green,  40), linestyle=hline.style_dotted, linewidth=1)
+hline(50, "Mid (50)",           color=color.new(color.gray,   20), linestyle=hline.style_solid,  linewidth=1)
+hline(45, "Reset SELL target",  color=color.new(color.green,  40), linestyle=hline.style_dotted, linewidth=1)
+hline(35, "⚠️ Riesgo SELL",     color=color.new(color.orange, 20), linestyle=hline.style_dashed, linewidth=1)
+hline(30, "❌ Agotamiento SELL", color=color.new(color.red,   20), linestyle=hline.style_dashed, linewidth=1)
+
+// ─────────────────────────────────────────────
+//  STATUS LABEL (última vela)
+// ─────────────────────────────────────────────
+var label status_label = na
+label.delete(status_label[1])
+
+zone_text =
+  sell_exhaustion ? "❌ AGOTAMIENTO SELL — NO TRADE" :
+  sell_risk       ? "⚠️ RIESGO SELL — Esperar reset a ~45" :
+  sell_active     ? "✅ ZONA ACTIVA SELL" :
+  buy_exhaustion  ? "❌ AGOTAMIENTO BUY — NO TRADE" :
+  buy_risk        ? "⚠️ RIESGO BUY — Esperar reset a ~55" :
+  buy_active      ? "✅ ZONA ACTIVA BUY" :
+  "🔄 NEUTRAL (cerca de 50)"
+
+zone_color =
+  sell_exhaustion or buy_exhaustion ? color.red :
+  sell_risk       or buy_risk       ? color.orange :
+  sell_active     or buy_active     ? color.green :
+  color.gray
+
+status_label := label.new(
+  bar_index, purple,
+  zone_text + "\nPurple: " + str.tostring(math.round(purple, 1)) + "  Yellow: " + str.tostring(math.round(yellow, 1)),
+  style     = label.style_label_left,
+  color     = zone_color,
+  textcolor = color.white,
+  size      = size.small
+)
+
+// ─────────────────────────────────────────────
+//  ALERTAS
+// ─────────────────────────────────────────────
+alertcondition(
+  ta.crossunder(purple, 35),
+  "🐤 Purple entró ZONA RIESGO SELL (~35)",
+  "⚠️ Purple cruzó bajo 35 — Zona de riesgo SELL. Esperar reset a ~45 antes de entrar."
+)
+alertcondition(
+  ta.crossunder(purple, 30),
+  "🐤 Purple en AGOTAMIENTO SELL (<30)",
+  "❌ Purple bajo 30 — AGOTAMIENTO. NO TRADE. Momentum bajista consumido."
+)
+alertcondition(
+  ta.crossover(purple, 65),
+  "🐤 Purple entró ZONA RIESGO BUY (~65)",
+  "⚠️ Purple cruzó sobre 65 — Zona de riesgo BUY. Esperar reset a ~55 antes de entrar."
+)
+alertcondition(
+  ta.crossover(purple, 70),
+  "🐤 Purple en AGOTAMIENTO BUY (>70)",
+  "❌ Purple sobre 70 — AGOTAMIENTO. NO TRADE. Momentum alcista consumido."
+)
+alertcondition(
+  ta.crossover(purple, 45) and purple < 50,
+  "🐤 Purple reset a 45 (SELL) — Revisar entrada",
+  "✅ Purple retornó a ~45 en zona SELL. Verificar CDX y Yellow para posible entrada."
+)
+alertcondition(
+  ta.crossunder(purple, 55) and purple > 50,
+  "🐤 Purple reset a 55 (BUY) — Revisar entrada",
+  "✅ Purple retornó a ~55 en zona BUY. Verificar CDX y Yellow para posible entrada."
+)

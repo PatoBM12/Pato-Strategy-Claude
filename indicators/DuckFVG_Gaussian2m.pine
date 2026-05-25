@@ -1,0 +1,106 @@
+//@version=5
+indicator("🐤 Duck FVG — Gaussian 2m Color", shorttitle="🐤 GC 2m", overlay=true)
+
+// ─────────────────────────────────────────────
+//  INPUTS
+// ─────────────────────────────────────────────
+tf         = input.timeframe("2",    "Timeframe del Gaussian", tooltip="Dejar en 2 para ver el Gaussian de 2m desde cualquier gráfico")
+poles_in   = input.int(4,            "Poles",                   minval=1, maxval=4,  group="Gaussian Settings")
+samp_in    = input.int(144,          "Sampling Period",         minval=2,            group="Gaussian Settings")
+mult_in    = input.float(1.414,      "Filtered True Range Multiplier", minval=0.001, step=0.001, group="Gaussian Settings")
+
+show_table = input.bool(true,        "Mostrar tabla en esquina", group="Display")
+table_pos  = input.string("Top Right","Posición tabla",          options=["Top Right","Top Left","Bottom Right","Bottom Left"], group="Display")
+show_bg    = input.bool(false,       "Colorear fondo del chart", group="Display")
+
+// ─────────────────────────────────────────────
+//  GAUSSIAN FILTER — corre en el TF solicitado
+//  (función definida aquí, llamada desde request.security)
+// ─────────────────────────────────────────────
+f_gauss() =>
+    src      = hlc3
+    atr_src  = ta.atr(1)
+
+    // Coeficientes (igual que GC [DW])
+    beta  = (1.0 - math.cos(2.0 * math.pi / samp_in)) / (math.pow(2.0, 1.0 / poles_in) - 1.0)
+    alpha = -beta + math.sqrt(beta * beta + 2.0 * beta)
+
+    // Filtro recursivo aplicado al precio
+    var float f1 = na
+    var float f2 = na
+    var float f3 = na
+    var float f4 = na
+    f1 := alpha * src    + (1.0 - alpha) * nz(f1[1], src)
+    f2 := alpha * f1     + (1.0 - alpha) * nz(f2[1], src)
+    f3 := alpha * f2     + (1.0 - alpha) * nz(f3[1], src)
+    f4 := alpha * f3     + (1.0 - alpha) * nz(f4[1], src)
+
+    // Filtro recursivo aplicado al ATR → Filtered True Range
+    var float a1 = na
+    var float a2 = na
+    var float a3 = na
+    var float a4 = na
+    a1 := alpha * atr_src + (1.0 - alpha) * nz(a1[1], atr_src)
+    a2 := alpha * a1      + (1.0 - alpha) * nz(a2[1], atr_src)
+    a3 := alpha * a2      + (1.0 - alpha) * nz(a3[1], atr_src)
+    a4 := alpha * a3      + (1.0 - alpha) * nz(a4[1], atr_src)
+
+    ftr   = a4 * mult_in
+    upper = f4 + ftr
+    lower = f4 - ftr
+
+    // Color: mismo criterio que GC [DW]
+    // Verde = filtro subiendo | Rojo = filtro bajando
+    is_bull = f4 >= f4[1]
+    is_bear = f4 <  f4[1]
+
+    [f4, upper, lower, is_bull, is_bear]
+
+// ─────────────────────────────────────────────
+//  REQUEST.SECURITY — corre f_gauss() en 2m
+//  lookahead_on → ve la vela 2m que está formando ahora
+// ─────────────────────────────────────────────
+[gc_filt, gc_upper, gc_lower, gc_bull, gc_bear] =
+    request.security(syminfo.tickerid, tf, f_gauss(), lookahead=barmerge.lookahead_on)
+
+// ─────────────────────────────────────────────
+//  TABLA EN ESQUINA
+// ─────────────────────────────────────────────
+if show_table
+    t_pos = switch table_pos
+        "Top Right"    => position.top_right
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        => position.bottom_left
+
+    var table t = table.new(t_pos, 2, 3, border_width=1, border_color=color.new(color.gray, 60))
+
+    // Header
+    table.cell(t, 0, 0, "🐤 GC " + tf + "m", bgcolor=color.new(color.gray, 30), text_color=color.white, text_size=size.small, text_halign=text.align_center)
+    table.cell(t, 1, 0, "",                   bgcolor=color.new(color.gray, 30))
+
+    // Estado color
+    estado_txt = gc_bull ? "BULLISH ▲" : gc_bear ? "BEARISH ▼" : "NEUTRAL ●"
+    estado_bg  = gc_bull ? color.new(color.lime, 20) : gc_bear ? color.new(color.red, 20) : color.new(color.gray, 40)
+
+    table.cell(t, 0, 1, "Color:", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 1, estado_txt, bgcolor=estado_bg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
+
+    // Bias Duck
+    signal_txt = gc_bull ? "✅ BUY bias" : gc_bear ? "✅ SELL bias" : "⚠️ Sin bias"
+    signal_bg  = gc_bull ? color.new(color.teal, 50) : gc_bear ? color.new(color.maroon, 50) : color.new(color.gray, 60)
+
+    table.cell(t, 0, 2, "Bias:", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 2, signal_txt, bgcolor=signal_bg, text_color=color.white, text_size=size.small, text_halign=text.align_center)
+
+// ─────────────────────────────────────────────
+//  FONDO OPCIONAL
+// ─────────────────────────────────────────────
+bg_col = show_bg ? (gc_bull ? color.new(color.lime, 92) : gc_bear ? color.new(color.red, 92) : na) : na
+bgcolor(bg_col, title="GC 2m Background")
+
+// ─────────────────────────────────────────────
+//  ALERTAS
+// ─────────────────────────────────────────────
+alertcondition(gc_bull and not gc_bull[1], "🐤 GC 2m giró BULLISH", "✅ Gaussian 2m cambió a BULLISH — revisar entrada BUY")
+alertcondition(gc_bear and not gc_bear[1], "🐤 GC 2m giró BEARISH", "✅ Gaussian 2m cambió a BEARISH — revisar entrada SELL")
